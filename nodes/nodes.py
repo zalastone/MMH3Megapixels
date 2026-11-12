@@ -1019,7 +1019,7 @@ class MMH3LatentUpscaleWithModelParams(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, model_name, width, height, device, precision, offload_model) -> io.NodeOutput:
+    def execute(cls, model_name, width, height, device, precision, offload_model=True) -> io.NodeOutput:
         width = int(round(width / 32.0)) * 32
         height = int(round(height / 32.0)) * 32
         param = {
@@ -1196,8 +1196,8 @@ class MMH3SpatialSplitParams(io.ComfyNode):
                 tile_height, grid_rows, grid_cols,
                 spatial_w_overlap, spatial_h_overlap,
                  fade_width, fade_height, min_tile_size, overlap_mode,
-                 overlap_blend, masked_area_noise, brightness_match,
-                 dynamic_fade, dynamic_fade_min) -> io.NodeOutput:
+                 overlap_blend, masked_area_noise=0.0, brightness_match=False,
+                 dynamic_fade="off", dynamic_fade_min=32) -> io.NodeOutput:
         if tile_size_mode == "rows_cols":
             # Equal-size grid solved HERE so the tile outputs are always real:
             # split upscale_width/height into grid_cols x grid_rows tiles of
@@ -1642,3 +1642,104 @@ class MMH3UltimateUpscale(io.ComfyNode):
 
         out = {"samples": comfy.nested_tensor.NestedTensor((acc_v, acc_a))}
         return io.NodeOutput(out, segments_debug, tiles_debug)
+
+
+# ---------------------------------------------------------------------------
+# megapixels -> native (multiple of 32) + ultimate (2x) dimensions
+# ---------------------------------------------------------------------------
+class AspectRatio(str, Enum):
+    SQUARE = "1:1 (Square)"
+    PHOTO_V = "2:3 (Portrait Photo)"
+    PHOTO_H = "3:2 (Photo)"
+    STANDARD_V = "3:4 (Portrait Standard)"
+    STANDARD_H = "4:3 (Standard)"
+    WIDESCREEN_V = "9:16 (Portrait Widescreen)"
+    WIDESCREEN_H = "16:9 (Widescreen)"
+    ULTRAWIDE_H = "21:9 (Ultrawide)"
+
+
+ASPECT_RATIOS: dict[AspectRatio, tuple[int, int]] = {
+    AspectRatio.SQUARE: (1, 1),
+    AspectRatio.PHOTO_V: (2, 3),
+    AspectRatio.PHOTO_H: (3, 2),
+    AspectRatio.STANDARD_V: (3, 4),
+    AspectRatio.STANDARD_H: (4, 3),
+    AspectRatio.WIDESCREEN_V: (9, 16),
+    AspectRatio.WIDESCREEN_H: (16, 9),
+    AspectRatio.ULTRAWIDE_H: (21, 9),
+}
+
+
+class MMH3Megapixels(io.ComfyNode):
+    """Resolve a megapixel target into the native H3 generation size (a
+    multiple of 32) and the exact 2x Ultimate canvas derived from it.
+
+    Native width/height feed the generation (Empty Latent Image, conditioning).
+    Ultimate width/height feed the upscale params (target canvas). The Ultimate
+    canvas is exactly 2x the native size; sequence dimensions stay multiples of
+    32. Tile maxima in the spatial split params should be clamped to the
+    Ultimate canvas.
+    """
+
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="MMH3Megapixels",
+            display_name="MMH3 Megapixels",
+            category="model/latent/minimax",
+            description=(
+                "Resolve a megapixel target into the native H3 generation size "
+                "(multiple of 32) and the exact 2x Ultimate canvas derived from "
+                "it. Native dims feed generation; Ultimate dims feed the upscale "
+                "params. Recommended 16:9 megapixel settings: 0.2->608x352 / "
+                "1216x704, 0.3->736x416 / 1472x832, 0.4->864x480 / "
+                "1728x960, 0.5->960x544 / 1920x1088, 0.6->1056x608 / "
+                "2112x1216, 0.7->1152x640 / 2304x1280, 0.8->1216x672 / "
+                "2432x1344, 0.9->1280x736 / 2560x1472, 0.98->1344x768 / "
+                "2688x1536. Bundled examples use 832x480 native -> "
+                "1664x960 Ultimate."
+            ),
+            search_aliases=["h3 megapixels", "h3 resolution", "native ultimate size"],
+            inputs=[
+                io.Combo.Input(
+                    "aspect_ratio",
+                    options=AspectRatio,
+                    default=AspectRatio.WIDESCREEN_H,
+                    tooltip="Aspect ratio of the generated (native) frame.",
+                ),
+                io.Float.Input(
+                    "megapixels",
+                    default=0.4,
+                    min=0.1,
+                    max=16.0,
+                    step=0.01,
+                    tooltip="Target total megapixels of the native frame. 1.0 MP ~ 1024x1024 for square.",
+                ),
+                io.Int.Input(
+                    id="multiple",
+                    default=32,
+                    min=32,
+                    max=128,
+                    step=32,
+                    tooltip="Nearest multiple the native dimensions are snapped to (keep 32 for H3).",
+                    advanced=True,
+                ),
+            ],
+            outputs=[
+                io.Int.Output("native_width", tooltip="Native generation width in pixels (multiple of `multiple`)."),
+                io.Int.Output("native_height", tooltip="Native generation height in pixels (multiple of `multiple`)."),
+                io.Int.Output("ultimate_width", tooltip="Ultimate 2x canvas width in pixels (native_width * 2)."),
+                io.Int.Output("ultimate_height", tooltip="Ultimate 2x canvas height in pixels (native_height * 2)."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, aspect_ratio: str, megapixels: float, multiple: int) -> io.NodeOutput:
+        w_ratio, h_ratio = ASPECT_RATIOS[aspect_ratio]
+        total_pixels = megapixels * 1024 * 1024
+        scale = math.sqrt(total_pixels / (w_ratio * h_ratio))
+        native_width = round(w_ratio * scale / multiple) * multiple
+        native_height = round(h_ratio * scale / multiple) * multiple
+        ultimate_width = native_width * 2
+        ultimate_height = native_height * 2
+        return io.NodeOutput(native_width, native_height, ultimate_width, ultimate_height)

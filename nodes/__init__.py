@@ -14,6 +14,7 @@ from .nodes import (
     MMH3SpatialSplitParams,
     MMH3FunControlnetParams,
     MMH3SpatialInpaintParams,
+    MMH3Megapixels,
 )
 from .tiled_diffusion import MMH3TiledDiffusion
 from .ltx import (

@@ -262,6 +262,21 @@
       "2": {
         "tooltip": "DEBUG ONLY. Per-chunk spatial grid metadata: offsets, tile extents, overlaps, stitching mode."
       }
+    },
+    "MMH3Megapixels": {
+      "display_name": "MMH3 Megapixels",
+      "description": "Resolve a megapixel target into the native H3 generation size (multiple of 32) and the exact 2x Ultimate canvas derived from it.",
+      "inputs": {
+        "aspect_ratio": { "tooltip": "Aspect ratio of the generated (native) frame." },
+        "megapixels": { "tooltip": "Target total megapixels of the native frame." },
+        "multiple": { "tooltip": "Nearest multiple the native dimensions are snapped to (keep 32 for H3)." }
+      },
+      "outputs": {
+        "0": { "tooltip": "Native generation width in pixels." },
+        "1": { "tooltip": "Native generation height in pixels." },
+        "2": { "tooltip": "Ultimate 2x canvas width in pixels." },
+        "3": { "tooltip": "Ultimate 2x canvas height in pixels." }
+      }
     }
   }
 }
